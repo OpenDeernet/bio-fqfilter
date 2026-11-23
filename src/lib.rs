@@ -7,6 +7,7 @@
 
 pub mod fastq;
 pub mod quality;
+pub mod window;
 
 pub use fastq::{ParseError, Reader, Record};
 pub use quality::mean_phred;
@@ -67,6 +68,7 @@ pub struct Stats {
     pub kept: u64,
     pub low_quality: u64,
     pub too_short: u64,
+    pub trimmed_bases: u64,
 }
 
 impl Stats {

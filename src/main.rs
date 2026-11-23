@@ -3,24 +3,27 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::process::ExitCode;
 
-use fqfilter::{classify, fastq, Config, Decision, Reason, Reader, Stats};
+use fqfilter::window::trim_ends;
+use fqfilter::{classify, fastq, Config, Decision, Reader, Stats};
 
 const USAGE: &str = "\
-usage: fqfilter [-q MIN_MEAN] [-l MIN_LENGTH] [INPUT]
+usage: fqfilter [-q MIN_MEAN] [-l MIN_LENGTH] [-w WINDOW] [INPUT]
 
 Streaming FASTQ quality filter. Reads INPUT (or stdin) and writes passing
 records to stdout. Summary counters go to stderr.
 
   -q MIN_MEAN    minimum mean Phred score to keep a read (default 20)
   -l MIN_LENGTH  minimum sequence length to keep a read (default 1)
+  -w WINDOW      trim low-quality ends with a sliding WINDOW before scoring
   -h, --help     show this help
 
 Exit status: 0 on success, 1 on usage or parse error.
 ";
 
-fn parse_args() -> Result<(Config, Option<String>), String> {
+fn parse_args() -> Result<(Config, Option<usize>, Option<String>), String> {
     let mut cfg = Config::default();
     let mut input = None;
+    let mut trim_window = None;
     let mut args = env::args().skip(1);
 
     while let Some(arg) = args.next() {
@@ -38,6 +41,15 @@ fn parse_args() -> Result<(Config, Option<String>), String> {
                     .parse()
                     .map_err(|_| format!("invalid -l value: {value}"))?;
             }
+            "-w" | "--trim-window" => {
+                let value = args.next().ok_or("-w needs a value")?;
+                let width: usize = value
+                    .parse()
+                    .map_err(|_| format!("invalid -w value: {value}"))?;
+                if width > 0 {
+                    trim_window = Some(width);
+                }
+            }
             other if other.starts_with('-') => return Err(format!("unknown flag: {other}")),
             other => {
                 if input.replace(other.to_string()).is_some() {
@@ -47,7 +59,7 @@ fn parse_args() -> Result<(Config, Option<String>), String> {
         }
     }
 
-    Ok((cfg, input))
+    Ok((cfg, trim_window, input))
 }
 
 fn open_input(path: Option<&str>) -> io::Result<Box<dyn Read>> {
@@ -58,7 +70,7 @@ fn open_input(path: Option<&str>) -> io::Result<Box<dyn Read>> {
 }
 
 fn run() -> Result<(), String> {
-    let (cfg, input) = parse_args()?;
+    let (cfg, trim_window, input) = parse_args()?;
     let source = |e: io::Error| format!("cannot read input: {e}");
     let mut reader = Reader::new(BufReader::with_capacity(
         1 << 16,
@@ -69,12 +81,15 @@ fn run() -> Result<(), String> {
     let mut stats = Stats::default();
 
     loop {
-        let record = match reader.next_record() {
+        let mut record = match reader.next_record() {
             Ok(Some(record)) => record,
             Ok(None) => break,
             Err(fastq::ParseError::Io(e)) => return Err(format!("read error: {e}")),
             Err(e) => return Err(e.to_string()),
         };
+        if let Some(width) = trim_window {
+            stats.trimmed_bases += trim_ends(&mut record, width, cfg.min_mean) as u64;
+        }
         let decision = classify(&record, &cfg);
         stats.record(decision);
         if decision == Decision::Keep {
@@ -86,8 +101,8 @@ fn run() -> Result<(), String> {
 
     out.flush().map_err(|e| format!("write error: {e}"))?;
     eprintln!(
-        "seen={} kept={} low_quality={} too_short={}",
-        stats.seen, stats.kept, stats.low_quality, stats.too_short
+        "seen={} kept={} low_quality={} too_short={} trimmed_bases={}",
+        stats.seen, stats.kept, stats.low_quality, stats.too_short, stats.trimmed_bases
     );
     Ok(())
 }
@@ -103,8 +118,7 @@ fn main() -> ExitCode {
             } else {
                 eprintln!("fqfilter: {msg}");
                 eprintln!("try 'fqfilter --help'");
-                let code = u8::try_from(Reason::LowQuality as u8 + 1).unwrap_or(1);
-                ExitCode::from(code)
+                ExitCode::FAILURE
             }
         }
     }
