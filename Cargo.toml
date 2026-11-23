@@ -1,0 +1,19 @@
+[package]
+name = "bio-fqfilter"
+version = "0.1.0"
+edition = "2021"
+description = "Streaming FASTQ quality filter with bounded memory"
+license = "MIT"
+
+[lib]
+name = "fqfilter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fqfilter"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
