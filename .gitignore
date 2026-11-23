@@ -1,0 +1,4 @@
+/target
+**/*.rs.bk
+*.fq.filtered
+.DS_Store
